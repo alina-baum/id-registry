@@ -59,6 +59,21 @@ td.year{font:500 13px 'IBM Plex Mono',monospace;white-space:nowrap}
 td.notes{color:var(--ink-soft);font-size:12.5px;min-width:200px}
 .chip{display:inline-block;font:500 11px 'IBM Plex Mono',monospace;padding:2px 8px;border-radius:99px;border:1px solid var(--line);background:var(--paper);white-space:nowrap}
 .chip.ind{background:#F0F4F1;border-color:#CBDCD2;color:#2C5240}
+
+.colwrap{position:relative}
+.colmenu{position:absolute;top:calc(100% + 6px);left:0;z-index:40;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(23,36,44,.12);min-width:190px}
+.colmenu label{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;cursor:pointer;white-space:nowrap}
+.colmenu input{accent-color:var(--ink);cursor:pointer}
+.colmenu .cm-head{font:600 10.5px 'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--ink-soft);padding-bottom:6px;border-bottom:1px solid var(--line);margin-bottom:6px}
+td.drug, th.stickydrug{position:sticky;left:0;background:var(--card);z-index:2}
+tr.pipeline td.drug{background:#FDFAF2}
+tr.discont td.drug{background:#FCF7F7}
+tr.euaonly td.drug{background:#FAFBFC}
+tr.failed td.drug{background:#FBFAFC}
+th.stickydrug{background:#FBFCFD;z-index:3}
+td.pth{font-weight:600;min-width:150px}
 td.milestone{color:#7A5A12;font-size:12.5px;min-width:180px}
 .chip.pip{background:#FBF3E2;border-color:#E4CD96;color:#7A5A12;margin-top:4px}
 .chip.disc{background:#FBEDED;border-color:#E0B4B4;color:#8C2F2F;margin-top:4px}
@@ -93,6 +108,8 @@ footer{margin-top:48px;font:400 11.5px/1.7 'IBM Plex Mono',monospace;color:var(-
     <select id="fRoute" aria-label="Filter by route"><option value="">All routes</option></select>
     <select id="fStatus" aria-label="Filter by status"><option value="">All statuses</option><option value="__approved">Approved only</option><option value="__pipeline">Pipeline only</option><option value="__disc">Discontinued / withdrawn only</option><option value="__eua">EUA-only (never approved)</option><option value="__fail">Phase 3 failures</option></select>
     <select id="fIndication" aria-label="Filter by indication"><option value="">All indications</option></select>
+    <div class="colwrap"><button class="btn ghost" id="colsBtn" aria-expanded="false">Columns</button><div class="colmenu" id="colMenu" hidden></div></div>
+    <button class="btn ghost" id="flat">Flat view</button>
     <button class="btn ghost" id="reset">Clear filters</button>
     <button class="btn" id="export">Export CSV</button>
     <span class="count" id="count"></span>
@@ -108,7 +125,21 @@ const DATA = [{"section": "Viral", "pathogen": "SARS-CoV-2", "drug": "Comirnaty"
 const SECTION_ORDER = ["Viral","Bacterial","Fungal","Parasitic"];
 const SEC_COLOR = {Viral:["var(--viral)","var(--viral-soft)"],Bacterial:["var(--bacterial)","var(--bacterial-soft)"],Fungal:["var(--fungal)","var(--fungal-soft)"],Parasitic:["var(--parasitic)","var(--parasitic-soft)"]};
 const $ = id => document.getElementById(id);
-let sortKey = null, sortDir = 1;
+let sortKey = null, sortDir = 1, flatView = false;
+const COLS = [
+  {k:"pathogen",  label:"Pathogen"},
+  {k:"drug",      label:"Drug"},
+  {k:"company",   label:"Company"},
+  {k:"modality",  label:"Modality"},
+  {k:"route",     label:"Route"},
+  {k:"moa",       label:"Mechanism"},
+  {k:"indication",label:"Indication"},
+  {k:"year",      label:"Approval year"},
+  {k:"milestone", label:"Next milestone"},
+  {k:"sales_2025",label:"2025 Sales"},
+  {k:"notes",     label:"Notes", sortable:false}
+];
+const hiddenCols = new Set();
 const closed = new Set();
 
 function uniq(key){ return [...new Set(DATA.map(r=>r[key]).filter(Boolean))]; }
@@ -143,11 +174,111 @@ function filtered(){
 
 function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
+
+
+// Parse a sales cell like "~$1.8B*", "≈€2.6B (franchise)", "$759M" into a number.
+// Returns null for non-numeric values (n/d, n/a, Pre-approval, Launch yr...).
+function salesVal(s){
+  if(!s) return null;
+  const m = String(s).match(/([\d,]+(?:\.\d+)?)\s*([BMK])?/i);
+  if(!m) return null;
+  if(!/[$£€]/.test(s)) return null;
+  const n = parseFloat(m[1].replace(/,/g,""));
+  if(isNaN(n)) return null;
+  const unit = (m[2]||"").toUpperCase();
+  return n * (unit==="B"?1e9 : unit==="M"?1e6 : unit==="K"?1e3 : 1);
+}
+
+function yearVal(s){
+  const m = String(s||"").match(/(\d{4})/);
+  return m ? parseInt(m[1],10) : null;
+}
+
+// Comparator: numeric where meaningful, text otherwise; blanks/non-numeric always last.
+function cmp(a, b, key, dir){
+  let va, vb;
+  if(key === "sales_2025"){ va = salesVal(a[key]); vb = salesVal(b[key]); }
+  else if(key === "year"){ va = yearVal(a[key]); vb = yearVal(b[key]); }
+  else {
+    const sa = String(a[key]||""), sb = String(b[key]||"");
+    if(!sa && sb) return 1;
+    if(sa && !sb) return -1;
+    return dir * sa.localeCompare(sb, undefined, {numeric:true});
+  }
+  if(va === null && vb === null) return 0;
+  if(va === null) return 1;   // non-numeric sinks regardless of direction
+  if(vb === null) return -1;
+  return dir * (va - vb);
+}
+
+function rowHTML(r, withPathogen){
+  const fail = /^Phase 3 (failed|halted|discontinued)/.test(r.status);
+  const eua = /^EUA/.test(r.status);
+  const disc = /^(Discontinued|Withdrawn)/.test(r.status);
+  const pip = r.status!=="Approved";
+  const cls = disc?' class="discont"':(fail?' class="failed"':(eua?' class="euaonly"':(pip?' class="pipeline"':'')));
+  const chip = pip?'<br><span class="chip '+(disc?'disc':(fail?'fail':(eua?'eua':'pip')))+'">'+esc(r.status)+'</span>':'';
+  const cell = {
+    pathogen: ()=>'<td class="pth">'+esc(r.pathogen)+'</td>',
+    drug:     ()=>'<td class="drug">'+esc(r.drug)+chip+'</td>',
+    company:  ()=>'<td>'+esc(r.company)+'</td>',
+    modality: ()=>'<td><span class="chip">'+esc(r.modality)+'</span></td>',
+    route:    ()=>'<td>'+esc(r.route)+'</td>',
+    moa:      ()=>'<td>'+esc(r.moa)+'</td>',
+    indication:()=>'<td><span class="chip ind">'+esc(r.indication)+'</span></td>',
+    year:     ()=>'<td class="year">'+esc(r.year||"\u2014")+'</td>',
+    milestone:()=>'<td class="milestone">'+esc(r.milestone||"\u2014")+'</td>',
+    sales_2025:()=>'<td class="year">'+esc(r.sales_2025||"n/d")+'</td>',
+    notes:    ()=>'<td class="notes">'+esc(r.notes)+'</td>'
+  };
+  let out = '<tr'+cls+'>';
+  COLS.forEach(c=>{
+    if(c.k==="pathogen" && !withPathogen) return;
+    if(hiddenCols.has(c.k)) return;
+    out += cell[c.k]();
+  });
+  return out + '</tr>';
+}
+
+function headHTML(withPathogen){
+  const arrow = k => sortKey===k ? (sortDir>0?" \u25B2":" \u25BC") : ' <span class="arrow">\u2195</span>';
+  let out = '<thead><tr>';
+  COLS.forEach(c=>{
+    if(c.k==="pathogen" && !withPathogen) return;
+    if(hiddenCols.has(c.k)) return;
+    const sticky = c.k==="drug" ? ' class="stickydrug"' : '';
+    out += c.sortable===false
+      ? '<th'+sticky+'>'+c.label+'</th>'
+      : '<th'+sticky+' data-k="'+c.k+'">'+c.label+arrow(c.k)+'</th>';
+  });
+  return out + '</tr></thead>';
+}
+
+function wireSort(box){
+  box.querySelectorAll("th[data-k]").forEach(th=>th.addEventListener("click", ()=>{
+    const k=th.dataset.k; if(sortKey===k){sortDir*=-1;}else{sortKey=k;sortDir=1;} render();
+  }));
+}
+
+function renderFlat(rows, main){
+  let g = [...rows];
+  if(sortKey){ g.sort((a,b)=> cmp(a,b,sortKey,sortDir)); }
+  const box = document.createElement("div");
+  box.className = "pgroup";
+  box.style.borderLeftColor = "var(--ink)";
+  box.innerHTML = '<div class="tbl-wrap"><table>' + headHTML(true) +
+    '<tbody>' + g.map(r=>rowHTML(r,true)).join("") + '</tbody></table></div>';
+  wireSort(box);
+  main.appendChild(box);
+}
+
 function render(){
   const rows = filtered();
   $("count").textContent = rows.length + " of " + DATA.length + " entries";
   const main = $("results"); main.innerHTML = "";
   if(!rows.length){ main.innerHTML = '<div class="empty">No entries match. Adjust the search or clear filters to see the full registry.</div>'; return; }
+
+  if(flatView){ renderFlat(rows, main); return; }
 
   for(const sec of SECTION_ORDER){
     const secRows = rows.filter(r=>r.section===sec);
@@ -161,26 +292,17 @@ function render(){
     secRows.forEach(r=>{ (groups[r.pathogen] ||= []).push(r); });
     Object.keys(groups).sort((a,b)=>a.localeCompare(b)).forEach(p=>{
       let g = groups[p];
-      if(sortKey){ g = [...g].sort((a,b)=> sortDir * String(a[sortKey]).localeCompare(String(b[sortKey]), undefined, {numeric:true})); }
+      if(sortKey){ g = [...g].sort((a,b)=> cmp(a,b,sortKey,sortDir)); }
       const box = document.createElement("div");
       box.className = "pgroup" + (closed.has(sec+"|"+p) ? " closed" : "");
       box.style.borderLeftColor = col;
-      const arrow = k => sortKey===k ? (sortDir>0?" ▲":" ▼") : ' <span class="arrow">↕</span>';
       box.innerHTML =
-        '<div class="pgroup-head" role="button" tabindex="0" aria-expanded="'+(!closed.has(sec+"|"+p))+'"><h3>'+esc(p)+'</h3><span class="n">'+g.length+' product'+(g.length>1?'s':'')+'</span><span class="caret">▼</span></div>' +
-        '<div class="tbl-wrap"><table><thead><tr>' +
-        '<th data-k="drug">Drug'+arrow("drug")+'</th><th data-k="company">Company'+arrow("company")+'</th>' +
-        '<th data-k="modality">Modality'+arrow("modality")+'</th><th data-k="route">Route'+arrow("route")+'</th>' +
-        '<th data-k="moa">Mechanism'+arrow("moa")+'</th><th data-k="indication">Indication'+arrow("indication")+'</th><th data-k="year">Approval year'+arrow("year")+'</th><th data-k="milestone">Next milestone'+arrow("milestone")+'</th><th data-k="sales_2025">2025 Sales'+arrow("sales_2025")+'</th><th>Notes</th>' +
-        '</tr></thead><tbody>' +
-        g.map(r=>{const fail = /^Phase 3 (failed|halted|discontinued)/.test(r.status); const eua = /^EUA/.test(r.status); const disc = /^(Discontinued|Withdrawn)/.test(r.status); const pip = r.status!=="Approved";
-          return '<tr'+(disc?' class="discont"':(fail?' class="failed"':(eua?' class="euaonly"':(pip?' class="pipeline"':''))))+'><td class="drug">'+esc(r.drug)+(pip?'<br><span class="chip '+(disc?'disc':(fail?'fail':(eua?'eua':'pip')))+'">'+esc(r.status)+'</span>':'')+'</td><td>'+esc(r.company)+'</td>' +
-          '<td><span class="chip">'+esc(r.modality)+'</span></td><td>'+esc(r.route)+'</td>' +
-          '<td>'+esc(r.moa)+'</td><td><span class="chip ind">'+esc(r.indication)+'</span></td><td class="year">'+esc(r.year||"—")+'</td><td class="milestone">'+esc(r.milestone||"—")+'</td><td class="year">'+esc(r.sales_2025||"n/d")+'</td><td class="notes">'+esc(r.notes)+'</td></tr>';}).join("") +
-        '</tbody></table></div>';
+        '<div class="pgroup-head" role="button" tabindex="0" aria-expanded="'+(!closed.has(sec+"|"+p))+'"><h3>'+esc(p)+'</h3><span class="n">'+g.length+' product'+(g.length>1?'s':'')+'</span><span class="caret">\u25BC</span></div>' +
+        '<div class="tbl-wrap"><table>' + headHTML(false) +
+        '<tbody>' + g.map(r=>rowHTML(r,false)).join("") + '</tbody></table></div>';
       box.querySelector(".pgroup-head").addEventListener("click", ()=>{ const k=sec+"|"+p; closed.has(k)?closed.delete(k):closed.add(k); render(); });
       box.querySelector(".pgroup-head").addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault(); e.target.click();} });
-      box.querySelectorAll("th[data-k]").forEach(th=>th.addEventListener("click", ()=>{ const k=th.dataset.k; if(sortKey===k){sortDir*=-1;}else{sortKey=k;sortDir=1;} render(); }));
+      wireSort(box);
       main.appendChild(box);
     });
   }
@@ -198,6 +320,27 @@ function exportCSV(){
 
 ["q","fSection","fPathogen","fCompany","fModality","fRoute","fIndication","fStatus"].forEach(id=>$(id).addEventListener("input", render));
 $("reset").addEventListener("click", ()=>{ ["q","fSection","fPathogen","fCompany","fModality","fRoute","fIndication","fStatus"].forEach(id=>$(id).value=""); sortKey=null; render(); });
+(function buildColMenu(){
+  const menu = $("colMenu");
+  menu.innerHTML = '<div class="cm-head">Show columns</div>' + COLS.filter(c=>c.k!=="drug").map(c=>
+    '<label><input type="checkbox" data-col="'+c.k+'" checked> '+c.label+'</label>').join("");
+  menu.querySelectorAll("input[data-col]").forEach(cb=>cb.addEventListener("change", ()=>{
+    cb.checked ? hiddenCols.delete(cb.dataset.col) : hiddenCols.add(cb.dataset.col);
+    render();
+  }));
+  $("colsBtn").addEventListener("click", e=>{
+    e.stopPropagation();
+    const open = menu.hasAttribute("hidden");
+    open ? menu.removeAttribute("hidden") : menu.setAttribute("hidden","");
+    $("colsBtn").setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", e=>{
+    if(!menu.hasAttribute("hidden") && !menu.contains(e.target)){
+      menu.setAttribute("hidden",""); $("colsBtn").setAttribute("aria-expanded","false");
+    }
+  });
+})();
+$("flat").addEventListener("click", ()=>{ flatView=!flatView; $("flat").textContent = flatView ? "Grouped view" : "Flat view"; $("flat").classList.toggle("ghost", !flatView); render(); });
 $("export").addEventListener("click", exportCSV);
 render();
 </script>
