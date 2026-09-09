@@ -158,6 +158,37 @@ footer .src{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);fo
 <div id="tlx-tip" role="tooltip"></div>
 </section>
 
+<section class="wrap" id="hmx-wrap" aria-label="Pathogen and modality map">
+<style>
+#hmx-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px 12px;margin-top:14px}
+#hmx-card h2{margin:0;font-size:1.05rem;color:var(--ink)}
+#hmx-sub{color:var(--ink-soft);font-size:.82rem;margin:2px 0 10px}
+#hmx-grid{display:grid;grid-template-columns:minmax(190px,240px) repeat(4,1fr);gap:2px;font-size:.74rem}
+.hmx-h{font-weight:600;color:var(--ink);padding:4px 6px;text-align:center}
+.hmx-secrow{grid-column:1/-1;font-weight:700;letter-spacing:.04em;text-transform:uppercase;font-size:.68rem;color:var(--ink-soft);padding:10px 2px 2px}
+.hmx-lab{padding:3px 6px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hmx-c{position:relative;border-radius:3px;min-height:20px;display:flex;align-items:center;justify-content:center;color:var(--ink);cursor:default}
+.hmx-c b{font-weight:600}
+.hmx-c i{position:absolute;top:1px;right:4px;font-style:normal;font-size:.62rem;color:inherit;opacity:.85;font-weight:700}
+.hmx-c.dark{color:#fff}
+.hmx-c.dark i{color:#fff;opacity:.9}
+#hmx-note{color:var(--ink-soft);font-size:.72rem;margin:8px 0 2px}
+#hmx-tip{position:fixed;z-index:50;background:var(--ink);color:#fff;border-radius:8px;padding:8px 10px;font-size:.75rem;line-height:1.4;pointer-events:none;max-width:300px;display:none;box-shadow:0 4px 14px rgba(23,36,44,.25)}
+</style>
+<div id="hmx-card">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+    <h2>Pathogen &times; modality map</h2>
+    <button class="btn ghost" id="hmx-toggle" aria-expanded="true" aria-controls="hmx-body" style="font-size:.75rem;padding:3px 10px">Hide map</button>
+  </div>
+  <div id="hmx-body">
+    <p id="hmx-sub">Approved products per pathogen group and modality; darker = more. Corner numbers (+n) are pipeline assets. Empty cells are the gaps.</p>
+    <div id="hmx-grid"></div>
+    <p id="hmx-note"></p>
+  </div>
+</div>
+<div id="hmx-tip" role="tooltip"></div>
+</section>
+
 <main class="wrap" id="results"></main>
 
 
@@ -541,6 +572,75 @@ render();
   tgl.addEventListener("click",()=>setOpen(body.style.display==="none"));
   try{if(sessionStorage.getItem("tlx-open")==="0")setOpen(false);}catch(e){}
   renderTlx();
+})();
+</script>
+
+
+<script>
+(function(){
+  const CATS=["Small molecules","Vaccines","Antibodies","Other modalities"];
+  function bucket(mod){const m=(mod||"").toLowerCase();
+    if(m.includes("vaccine"))return "Vaccines";
+    if(m.includes("antibod")||m.includes("mab"))return "Antibodies";
+    if(m.includes("small molecule"))return "Small molecules";
+    return "Other modalities";}
+  const SECS=(typeof SECTION_ORDER!=="undefined")?SECTION_ORDER:["Viral","Bacterial","Fungal","Parasitic"];
+  const map={}, secOf={};
+  DATA.forEach(r=>{
+    const p=r.pathogen; if(!p)return;
+    secOf[p]=r.section;
+    const cell=(map[p]=map[p]||{});
+    const c=(cell[bucket(r.modality)]=cell[bucket(r.modality)]||{ap:new Set(),pl:new Set()});
+    const s=r.status;
+    if(s==="Approved") c.ap.add(r.drug);
+    else if(!/^(Discontinued|Withdrawn|EUA)/.test(s) && !/^Phase 3 (failed|halted|discontinued)/.test(s) && !/elsewhere/.test(s)) c.pl.add(r.drug);
+  });
+  let maxA=0;
+  Object.values(map).forEach(cell=>CATS.forEach(c=>{if(cell[c])maxA=Math.max(maxA,cell[c].ap.size);}));
+  const grid=document.getElementById("hmx-grid"), tip=document.getElementById("hmx-tip");
+  const HDRCOL={"Small molecules":"#7C4DBC","Vaccines":"#D97706","Antibodies":"#E11D48","Other modalities":"#2563EB"};
+  let h='<div></div>'+CATS.map(c=>'<div class="hmx-h"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+HDRCOL[c]+';margin-right:5px"></span>'+c.replace(" modalities","")+'</div>').join('');
+  const cellsMeta=[];
+  SECS.forEach(sec=>{
+    const groups=Object.keys(map).filter(p=>secOf[p]===sec)
+      .sort((a,b)=>a.localeCompare(b));
+    if(!groups.length)return;
+    h+='<div class="hmx-secrow">'+sec+'</div>';
+    groups.forEach(p=>{
+      h+='<div class="hmx-lab" title="'+p.replace(/"/g,"&quot;")+'">'+p+'</div>';
+      CATS.forEach(c=>{
+        const d=(map[p]&&map[p][c])||{ap:new Set(),pl:new Set()};
+        const a=d.ap.size, pl=d.pl.size;
+        const RGB={"Small molecules":"124,77,188","Vaccines":"217,119,6","Antibodies":"225,29,72","Other modalities":"37,99,235"};
+        const t=Math.sqrt(a/maxA);
+        const bg=a===0?"#F2F5F6":"rgba("+RGB[c]+","+(0.12+0.85*t).toFixed(2)+")";
+        const dark=t>0.55;
+        h+='<div class="hmx-c'+(dark?" dark":"")+'" data-i="'+cellsMeta.length+'" style="background:'+bg+'">'+(a?'<b>'+a+'</b>':'')+(pl?'<i>+'+pl+'</i>':'')+'</div>';
+        cellsMeta.push({p,c,ap:[...d.ap],pl:[...d.pl]});
+      });
+    });
+  });
+  grid.innerHTML=h;
+  const nGroups=new Set(Object.keys(map)).size;
+  document.getElementById("hmx-note").textContent=nGroups+" pathogen groups. Counts are unique products within each cell; combination products appear under each relevant pathogen by design.";
+  grid.addEventListener("mousemove",e=>{
+    const t=e.target.closest(".hmx-c[data-i]");
+    if(!t){tip.style.display="none";return;}
+    const m=cellsMeta[+t.dataset.i];
+    if(!m.ap.length&&!m.pl.length){tip.style.display="none";return;}
+    const nm=x=>x.replace(/\s*\(.*$/,"");
+    let s="<b>"+m.p+" — "+m.c+"</b>";
+    if(m.ap.length)s+="<br>Approved ("+m.ap.length+"): "+m.ap.slice(0,8).map(nm).join(", ")+(m.ap.length>8?" +"+(m.ap.length-8)+" more":"");
+    if(m.pl.length)s+="<br>Pipeline ("+m.pl.length+"): "+m.pl.slice(0,8).map(nm).join(", ")+(m.pl.length>8?" +"+(m.pl.length-8)+" more":"");
+    tip.innerHTML=s; tip.style.display="block";
+    tip.style.left=Math.min(e.clientX+14,window.innerWidth-320)+"px";
+    tip.style.top=(e.clientY+14)+"px";
+  });
+  grid.addEventListener("mouseleave",()=>tip.style.display="none");
+  const tgl=document.getElementById("hmx-toggle"), body=document.getElementById("hmx-body");
+  function setOpen(o){body.style.display=o?"":"none";tgl.textContent=o?"Hide map":"Show map";tgl.setAttribute("aria-expanded",String(o));try{sessionStorage.setItem("hmx-open",o?"1":"0");}catch(e){}}
+  tgl.addEventListener("click",()=>setOpen(body.style.display==="none"));
+  try{if(sessionStorage.getItem("hmx-open")==="0")setOpen(false);}catch(e){}
 })();
 </script>
 
