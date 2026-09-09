@@ -425,7 +425,7 @@ render();
 (function(){
   const DIMS = {
     section:{label:"Section", cats:["Viral","Bacterial","Fungal","Parasitic"],
-      col:{Viral:"#5A4FB8",Bacterial:"#B0611E",Fungal:"#0F7E74",Parasitic:"#5E7A1F"},
+      col:{Viral:"#5A4FB8",Bacterial:"#B0611E",Fungal:"#0F7E74",Parasitic:"#D9A406"},
       of:r=>r.section},
     modality:{label:"Modality", cats:["Small molecules","Vaccines","Antibodies","Other modalities"],
       col:{"Small molecules":"#7C4DBC","Vaccines":"#D97706","Antibodies":"#E11D48","Other modalities":"#2563EB"},
@@ -435,7 +435,7 @@ render();
         if(m.includes("small molecule"))return "Small molecules";
         return "Other modalities";}},
     indication:{label:"Indication", cats:["Treatment","Prevention","Both / other"],
-      col:{Treatment:"#0F7E74",Prevention:"#5A4FB8","Both / other":"#5E7A1F"},
+      col:{Treatment:"#0F7E74",Prevention:"#5A4FB8","Both / other":"#D9A406"},
       of:r=>{const i=(r.indication||"");
         if(/\+/.test(i))return "Both / other";
         if(i.startsWith("Prevention"))return "Prevention";
